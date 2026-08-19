@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+// AgentService is the agent's local control/health surface, owned by this repo.
+// Core observes agents through the work protocol (core.v1); this direct surface
+// is for operators and health checks.
+package maintainerd.agent.v1;
+
+option go_package = "github.com/maintainerd/agent/gen/maintainerd/agent/v1;agentv1";
+
+// AgentService is the agent's own control surface.
+service AgentService {
+  // Ping is a liveness check.
+  rpc Ping(PingRequest) returns (PingResponse);
+  // Info returns the agent's identity and whether its runtime is reachable.
+  rpc Info(InfoRequest) returns (InfoResponse);
+}
+
+message PingRequest {}
+
+message PingResponse {
+  bool ok = 1;
+}
+
+message InfoRequest {}
+
+message InfoResponse {
+  string name = 1;
+  string version = 2;
+  string status = 3;
+  bool runtime_connected = 4;
+}

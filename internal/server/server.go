@@ -25,7 +25,7 @@ func New(rt *runtimeclient.Client) *Server { return &Server{rt: rt} }
 // Router builds the HTTP routes.
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
+	r.Use(middleware.RequestID, middleware.Recoverer)
 
 	// Liveness: the agent process is up.
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {

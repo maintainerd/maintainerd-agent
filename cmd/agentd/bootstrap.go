@@ -28,6 +28,7 @@ func run(parent context.Context) error {
 	logging.Setup(config.LogLevel)
 	slog.Info("starting maintainerd-agent",
 		"app_env", config.AppEnv,
+		"secret_provider", config.SecretProvider,
 		"agent_name", config.AgentName,
 		"runtime_addr", config.RuntimeAddr,
 		"grpc_port", config.GRPCPort,

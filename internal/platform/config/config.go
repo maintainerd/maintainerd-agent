@@ -13,6 +13,9 @@ var (
 	AppEnv string
 	// LogLevel is debug|info|warn|error.
 	LogLevel string
+	// SecretProvider selects where secrets come from (SECRET_PROVIDER, default
+	// "env"). maintainerd-secret and cloud providers plug in here as they land.
+	SecretProvider string
 	// AgentName identifies this agent instance.
 	AgentName string
 	// RuntimeAddr is the maintainerd-docker RuntimeService gRPC address.
@@ -32,6 +35,7 @@ var (
 func Load() {
 	AppEnv = getEnv("APP_ENV", "development")
 	LogLevel = getEnv("LOG_LEVEL", "info")
+	SecretProvider = getEnv("SECRET_PROVIDER", "env")
 	AgentName = getEnv("AGENT_NAME", "agent-local")
 	RuntimeAddr = getEnv("RUNTIME_ADDR", "localhost:9090")
 	CoreAddr = getEnv("CORE_ADDR", "")

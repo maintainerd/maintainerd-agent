@@ -9,10 +9,10 @@ on:
 permissions:
   contents: read
 
-# The agent consumes maintainerd-core and maintainerd-docker via local module
-# replaces (see go.mod). In CI we check out those siblings and repoint the
-# replaces at them so the module resolves. (A Go workspace / published modules
-# replace this once the suite ships.)
+# The agent consumes the SDK, core, docker, and secret via local module replaces
+# (see go.mod). In CI we check out those siblings and repoint the replaces at
+# them so the module resolves. (A Go workspace / published modules replace this
+# once the suite ships.)
 jobs:
   proto:
     name: Proto (buf lint)
@@ -33,16 +33,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Check out core (sibling dep)
+      - name: Check out sibling deps
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: maintainerd/maintainerd
           path: .deps/core
-      - name: Check out docker (sibling dep)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: maintainerd/maintainerd-docker
           path: .deps/docker
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maintainerd/maintainerd-sdk
+          path: .deps/sdk
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maintainerd/maintainerd-secret
+          path: .deps/secret
       - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: go.mod
@@ -51,6 +58,8 @@ jobs:
         run: |
           go mod edit -replace github.com/maintainerd/core=./.deps/core
           go mod edit -replace github.com/maintainerd/docker=./.deps/docker
+          go mod edit -replace github.com/maintainerd/sdk=./.deps/sdk
+          go mod edit -replace github.com/maintainerd/secret=./.deps/secret
       - run: go build ./...
       - run: go vet ./...
       - run: go test -race -count=1 -timeout=300s ./...
@@ -60,16 +69,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Check out core (sibling dep)
+      - name: Check out sibling deps
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: maintainerd/maintainerd
           path: .deps/core
-      - name: Check out docker (sibling dep)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: maintainerd/maintainerd-docker
           path: .deps/docker
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maintainerd/maintainerd-sdk
+          path: .deps/sdk
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maintainerd/maintainerd-secret
+          path: .deps/secret
       - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: go.mod
@@ -78,6 +94,8 @@ jobs:
         run: |
           go mod edit -replace github.com/maintainerd/core=./.deps/core
           go mod edit -replace github.com/maintainerd/docker=./.deps/docker
+          go mod edit -replace github.com/maintainerd/sdk=./.deps/sdk
+          go mod edit -replace github.com/maintainerd/secret=./.deps/secret
       - name: staticcheck
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@latest

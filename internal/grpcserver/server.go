@@ -13,8 +13,9 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
+	sdkruntime "github.com/maintainerd/sdk/runtime"
+
 	agentv1 "github.com/maintainerd/agent/gen/maintainerd/agent/v1"
-	"github.com/maintainerd/agent/internal/runtimeclient"
 )
 
 // Service implements agentv1.AgentServiceServer.
@@ -22,10 +23,10 @@ type Service struct {
 	agentv1.UnimplementedAgentServiceServer
 	name    string
 	version string
-	rt      *runtimeclient.Client
+	rt      *sdkruntime.Client
 }
 
-func NewService(name, version string, rt *runtimeclient.Client) *Service {
+func NewService(name, version string, rt *sdkruntime.Client) *Service {
 	return &Service{name: name, version: version, rt: rt}
 }
 

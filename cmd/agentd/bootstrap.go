@@ -10,11 +10,11 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/maintainerd/agent/internal/coreclient"
+	sdk "github.com/maintainerd/sdk"
+
 	"github.com/maintainerd/agent/internal/grpcserver"
 	"github.com/maintainerd/agent/internal/platform/config"
 	"github.com/maintainerd/agent/internal/platform/logging"
-	"github.com/maintainerd/agent/internal/runtimeclient"
 	"github.com/maintainerd/agent/internal/server"
 	"github.com/maintainerd/agent/internal/worker"
 )
@@ -22,8 +22,8 @@ import (
 // version is the agent build version (overridable via -ldflags at build time).
 var version = "0.1.0-dev"
 
-// run executes the agent bootstrap: connect to the runtime (docker) and, if
-// configured, to Core (core.v1); then serve the agent.v1 gRPC surface + HTTP
+// run executes the agent bootstrap: build the maintainerd SDK client (runtime +,
+// if configured, control plane), then serve the agent.v1 gRPC surface + HTTP
 // liveness and run the pull → execute → report loop until a signal.
 func run(parent context.Context) error {
 	config.Load()
@@ -39,41 +39,39 @@ func run(parent context.Context) error {
 		"http_port", config.HTTPPort,
 	)
 
-	rt, err := runtimeclient.Dial(config.RuntimeAddr)
+	// One SDK client wires the runtime (docker) and, when CORE_ADDR is set, the
+	// control plane (core.v1). No more hand-rolled clients.
+	client, err := sdk.New(parent, sdk.Config{
+		RuntimeAddr: config.RuntimeAddr,
+		CoreAddr:    config.CoreAddr,
+	})
 	if err != nil {
-		return fmt.Errorf("dial runtime: %w", err)
+		return fmt.Errorf("init sdk client: %w", err)
 	}
-	defer rt.Close()
-
-	// Core is optional: with no CORE_ADDR the agent runs runtime-only.
-	var core *coreclient.Client
-	if config.CoreAddr != "" {
-		core, err = coreclient.Dial(config.CoreAddr)
-		if err != nil {
-			return fmt.Errorf("dial core: %w", err)
-		}
-		defer core.Close()
-		slog.Info("control plane wired", "core_addr", config.CoreAddr)
-	} else {
-		slog.Warn("CORE_ADDR not set — running runtime-only (no control plane)")
-	}
+	defer client.Close()
 
 	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// Probe the runtime. Warn but do not fail — the work loop retries.
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	if err := rt.Ping(probeCtx); err != nil {
+	if err := client.Runtime.Ping(probeCtx); err != nil {
 		slog.Warn("runtime (docker) not reachable yet", "addr", config.RuntimeAddr, "error", err.Error())
 	} else {
 		slog.Info("connected to runtime (docker)", "addr", config.RuntimeAddr)
 	}
 	cancel()
 
+	if config.CoreAddr != "" {
+		slog.Info("control plane wired", "core_addr", config.CoreAddr)
+	} else {
+		slog.Warn("CORE_ADDR not set — running runtime-only (no control plane)")
+	}
+
 	// Best-effort register with Core (needs the agent to exist in Core's inventory).
-	if core != nil && config.AgentUUID != "" {
+	if client.Core != nil && config.AgentUUID != "" {
 		regCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		if err := core.Register(regCtx, config.AgentUUID, version, nil); err != nil {
+		if err := client.Core.Register(regCtx, config.AgentUUID, version, nil); err != nil {
 			slog.Warn("register with core failed (heartbeat will retry)", "error", err.Error())
 		} else {
 			slog.Info("registered with core", "agent_uuid", config.AgentUUID)
@@ -81,9 +79,9 @@ func run(parent context.Context) error {
 		cancel()
 	}
 
-	agentSvc := grpcserver.NewService(config.AgentName, version, rt)
-	httpSrv := server.New(rt)
-	work := worker.New(core, rt, config.AgentUUID, config.PollInterval)
+	agentSvc := grpcserver.NewService(config.AgentName, version, client.Runtime)
+	httpSrv := server.New(client.Runtime)
+	work := worker.New(client.Core, client.Runtime, config.AgentUUID, config.PollInterval)
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return grpcserver.Serve(gctx, config.GRPCPort, agentSvc) })

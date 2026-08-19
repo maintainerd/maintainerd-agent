@@ -1,6 +1,6 @@
 // Package worker is the agent's execution loop — the pull-model middle of the
 // control loop. Each tick it pulls work from Core, executes it against the
-// runtime (maintainerd-docker), and reports observed status back to Core.
+// runtime, and reports observed status back — all via the maintainerd SDK.
 package worker
 
 import (
@@ -9,23 +9,20 @@ import (
 	"log/slog"
 	"time"
 
-	corev1 "github.com/maintainerd/core/gen/maintainerd/core/v1"
-	runtimev1 "github.com/maintainerd/docker/gen/maintainerd/runtime/v1"
-
-	"github.com/maintainerd/agent/internal/coreclient"
-	"github.com/maintainerd/agent/internal/runtimeclient"
+	sdkcore "github.com/maintainerd/sdk/core"
+	sdkruntime "github.com/maintainerd/sdk/runtime"
 )
 
 // Worker owns the pull → execute → report loop.
 type Worker struct {
-	core      *coreclient.Client // nil when CORE_ADDR is unset (runtime-only mode)
-	rt        *runtimeclient.Client
+	core      *sdkcore.Client // nil when CORE_ADDR is unset (runtime-only mode)
+	rt        *sdkruntime.Client
 	agentUUID string
 	interval  time.Duration
 	maxItems  int32
 }
 
-func New(core *coreclient.Client, rt *runtimeclient.Client, agentUUID string, interval time.Duration) *Worker {
+func New(core *sdkcore.Client, rt *sdkruntime.Client, agentUUID string, interval time.Duration) *Worker {
 	return &Worker{core: core, rt: rt, agentUUID: agentUUID, interval: interval, maxItems: 10}
 }
 
@@ -57,7 +54,6 @@ func (w *Worker) tick(ctx context.Context) {
 		return // runtime-only mode: nothing to pull
 	}
 
-	// Keepalive (best-effort — needs the agent to exist in Core).
 	hbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	_ = w.core.Heartbeat(hbCtx, w.agentUUID)
 	cancel()
@@ -85,17 +81,17 @@ type containerSpec struct {
 
 // reconcile drives one work item toward its desired spec: pull the image, run
 // the container, and report the observed result back to Core.
-func (w *Worker) reconcile(ctx context.Context, it *corev1.WorkItem) {
+func (w *Worker) reconcile(ctx context.Context, it sdkcore.WorkItem) {
 	var spec containerSpec
-	if err := json.Unmarshal([]byte(it.GetSpecJson()), &spec); err != nil {
+	if err := json.Unmarshal([]byte(it.SpecJSON), &spec); err != nil {
 		w.report(ctx, it, "failed", map[string]any{"error": "invalid spec: " + err.Error()})
 		return
 	}
 	name := spec.Name
 	if name == "" {
-		name = it.GetName()
+		name = it.Name
 	}
-	slog.Info("reconciling resource", "resource", it.GetResourceUuid(), "kind", it.GetKind(), "image", spec.Image, "name", name)
+	slog.Info("reconciling resource", "resource", it.ResourceUUID, "kind", it.Kind, "image", spec.Image, "name", name)
 
 	if spec.Image == "" {
 		w.report(ctx, it, "failed", map[string]any{"error": "spec.image is required"})
@@ -109,34 +105,34 @@ func (w *Worker) reconcile(ctx context.Context, it *corev1.WorkItem) {
 		w.report(ctx, it, "failed", map[string]any{"error": "pull: " + err.Error()})
 		return
 	}
-	handle, err := w.rt.Run(runCtx, &runtimev1.WorkloadSpec{
+	id, err := w.rt.Run(runCtx, sdkruntime.Spec{
 		Image:  spec.Image,
 		Name:   name,
 		Cmd:    spec.Cmd,
 		Env:    spec.Env,
-		Labels: map[string]string{"maintainerd.resource": it.GetResourceUuid()},
+		Labels: map[string]string{"maintainerd.resource": it.ResourceUUID},
 	})
 	if err != nil {
 		w.report(ctx, it, "failed", map[string]any{"error": "run: " + err.Error()})
 		return
 	}
-	w.report(ctx, it, "running", map[string]any{"container_id": handle.GetId()})
+	w.report(ctx, it, "running", map[string]any{"container_id": id})
 }
 
 // report writes observed status back to Core, advancing observed_generation so
 // an in-sync (or failed) resource is not pulled again.
-func (w *Worker) report(ctx context.Context, it *corev1.WorkItem, state string, status map[string]any) {
+func (w *Worker) report(ctx context.Context, it sdkcore.WorkItem, state string, status map[string]any) {
 	payload, _ := json.Marshal(status)
 	repCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if _, err := w.core.ReportStatus(repCtx, w.agentUUID, []*corev1.StatusReport{{
-		ResourceUuid:       it.GetResourceUuid(),
+	if _, err := w.core.ReportStatus(repCtx, w.agentUUID, []sdkcore.StatusReport{{
+		ResourceUUID:       it.ResourceUUID,
 		State:              state,
-		StatusJson:         string(payload),
-		ObservedGeneration: it.GetGeneration(),
+		StatusJSON:         string(payload),
+		ObservedGeneration: it.Generation,
 	}}); err != nil {
-		slog.Warn("report status failed", "resource", it.GetResourceUuid(), "error", err.Error())
+		slog.Warn("report status failed", "resource", it.ResourceUUID, "error", err.Error())
 		return
 	}
-	slog.Info("reported status", "resource", it.GetResourceUuid(), "state", state)
+	slog.Info("reported status", "resource", it.ResourceUUID, "state", state)
 }

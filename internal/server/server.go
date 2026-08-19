@@ -12,15 +12,15 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/maintainerd/agent/internal/runtimeclient"
+	sdkruntime "github.com/maintainerd/sdk/runtime"
 )
 
 // Server adapts the agent's health to HTTP.
 type Server struct {
-	rt *runtimeclient.Client
+	rt *sdkruntime.Client
 }
 
-func New(rt *runtimeclient.Client) *Server { return &Server{rt: rt} }
+func New(rt *sdkruntime.Client) *Server { return &Server{rt: rt} }
 
 // Router builds the HTTP routes.
 func (s *Server) Router() http.Handler {

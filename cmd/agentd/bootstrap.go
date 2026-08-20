@@ -12,10 +12,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/maintainerd/kit/log"
+	kitserver "github.com/maintainerd/kit/server"
+
 	"github.com/maintainerd/agent/internal/coreclient"
 	"github.com/maintainerd/agent/internal/grpcserver"
 	"github.com/maintainerd/agent/internal/platform/config"
-	"github.com/maintainerd/agent/internal/platform/logging"
 	"github.com/maintainerd/agent/internal/runtimeclient"
 	"github.com/maintainerd/agent/internal/server"
 	"github.com/maintainerd/agent/internal/worker"
@@ -31,7 +33,7 @@ var version = "0.1.0-dev"
 // control plane is not a public SDK surface.
 func run(parent context.Context) error {
 	config.Load()
-	logging.Setup(config.LogLevel)
+	log.Setup(config.LogLevel)
 	slog.Info("starting maintainerd-agent",
 		"app_env", config.AppEnv,
 		"secret_provider", config.SecretProvider,
@@ -105,7 +107,7 @@ func run(parent context.Context) error {
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return grpcserver.Serve(gctx, config.GRPCPort, agentSvc) })
-	g.Go(func() error { return server.Start(gctx, config.HTTPPort, httpSrv.Router()) })
+	g.Go(func() error { return kitserver.ServeHTTP(gctx, config.HTTPPort, httpSrv.Router()) })
 	g.Go(func() error { return work.Run(gctx) })
 	return g.Wait()
 }

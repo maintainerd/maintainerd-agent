@@ -14,6 +14,7 @@ require (
 )
 
 require (
+	github.com/maintainerd/kit v0.0.0-00010101000000-000000000000
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
@@ -21,3 +22,5 @@ require (
 )
 
 replace github.com/maintainerd/core => ../maintainerd
+
+replace github.com/maintainerd/kit => ../maintainerd-kit

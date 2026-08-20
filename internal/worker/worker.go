@@ -9,8 +9,8 @@ import (
 	"log/slog"
 	"time"
 
-	sdkcore "github.com/maintainerd/sdk/core"
-	sdkruntime "github.com/maintainerd/sdk/runtime"
+	sdkcore "github.com/maintainerd/agent/internal/coreclient"
+	sdkruntime "github.com/maintainerd/agent/internal/runtimeclient"
 )
 
 // Worker owns the pull → execute → report loop.

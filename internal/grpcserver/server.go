@@ -13,7 +13,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	sdkruntime "github.com/maintainerd/sdk/runtime"
+	sdkruntime "github.com/maintainerd/agent/internal/runtimeclient"
 
 	agentv1 "github.com/maintainerd/agent/gen/maintainerd/agent/v1"
 )

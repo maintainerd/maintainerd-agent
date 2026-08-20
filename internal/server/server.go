@@ -12,7 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	sdkruntime "github.com/maintainerd/sdk/runtime"
+	sdkruntime "github.com/maintainerd/agent/internal/runtimeclient"
 )
 
 // Server adapts the agent's health to HTTP.

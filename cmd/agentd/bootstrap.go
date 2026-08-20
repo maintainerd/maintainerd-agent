@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
-	sdk "github.com/maintainerd/sdk"
-
+	"github.com/maintainerd/agent/internal/coreclient"
 	"github.com/maintainerd/agent/internal/grpcserver"
 	"github.com/maintainerd/agent/internal/platform/config"
 	"github.com/maintainerd/agent/internal/platform/logging"
+	"github.com/maintainerd/agent/internal/runtimeclient"
 	"github.com/maintainerd/agent/internal/server"
 	"github.com/maintainerd/agent/internal/worker"
 )
@@ -22,9 +24,11 @@ import (
 // version is the agent build version (overridable via -ldflags at build time).
 var version = "0.1.0-dev"
 
-// run executes the agent bootstrap: build the maintainerd SDK client (runtime +,
-// if configured, control plane), then serve the agent.v1 gRPC surface + HTTP
-// liveness and run the pull → execute → report loop until a signal.
+// run executes the agent bootstrap: dial the runtime (docker) and, when
+// CORE_ADDR is set, the control plane (core.v1), then serve the agent.v1 gRPC
+// surface + HTTP liveness and run the pull → execute → report loop until a
+// signal. The runtime and control-plane clients are agent-internal — the
+// control plane is not a public SDK surface.
 func run(parent context.Context) error {
 	config.Load()
 	logging.Setup(config.LogLevel)
@@ -39,39 +43,55 @@ func run(parent context.Context) error {
 		"http_port", config.HTTPPort,
 	)
 
-	// One SDK client wires the runtime (docker) and, when CORE_ADDR is set, the
-	// control plane (core.v1). No more hand-rolled clients.
-	client, err := sdk.New(parent, sdk.Config{
-		RuntimeAddr: config.RuntimeAddr,
-		CoreAddr:    config.CoreAddr,
-	})
+	dialOpts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	var conns []*grpc.ClientConn
+	defer func() {
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	}()
+
+	// Runtime (docker) — always.
+	rtConn, err := grpc.NewClient(config.RuntimeAddr, dialOpts...)
 	if err != nil {
-		return fmt.Errorf("init sdk client: %w", err)
+		return fmt.Errorf("dial runtime: %w", err)
 	}
-	defer client.Close()
+	conns = append(conns, rtConn)
+	rt := runtimeclient.New(rtConn)
+
+	// Control plane (core.v1) — only when CORE_ADDR is set.
+	var core *coreclient.Client
+	if config.CoreAddr != "" {
+		coreConn, err := grpc.NewClient(config.CoreAddr, dialOpts...)
+		if err != nil {
+			return fmt.Errorf("dial core: %w", err)
+		}
+		conns = append(conns, coreConn)
+		core = coreclient.New(coreConn)
+	}
 
 	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// Probe the runtime. Warn but do not fail — the work loop retries.
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	if err := client.Runtime.Ping(probeCtx); err != nil {
+	if err := rt.Ping(probeCtx); err != nil {
 		slog.Warn("runtime (docker) not reachable yet", "addr", config.RuntimeAddr, "error", err.Error())
 	} else {
 		slog.Info("connected to runtime (docker)", "addr", config.RuntimeAddr)
 	}
 	cancel()
 
-	if config.CoreAddr != "" {
+	if core != nil {
 		slog.Info("control plane wired", "core_addr", config.CoreAddr)
 	} else {
 		slog.Warn("CORE_ADDR not set — running runtime-only (no control plane)")
 	}
 
 	// Best-effort register with Core (needs the agent to exist in Core's inventory).
-	if client.Core != nil && config.AgentUUID != "" {
+	if core != nil && config.AgentUUID != "" {
 		regCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		if err := client.Core.Register(regCtx, config.AgentUUID, version, nil); err != nil {
+		if err := core.Register(regCtx, config.AgentUUID, version, nil); err != nil {
 			slog.Warn("register with core failed (heartbeat will retry)", "error", err.Error())
 		} else {
 			slog.Info("registered with core", "agent_uuid", config.AgentUUID)
@@ -79,9 +99,9 @@ func run(parent context.Context) error {
 		cancel()
 	}
 
-	agentSvc := grpcserver.NewService(config.AgentName, version, client.Runtime)
-	httpSrv := server.New(client.Runtime)
-	work := worker.New(client.Core, client.Runtime, config.AgentUUID, config.PollInterval)
+	agentSvc := grpcserver.NewService(config.AgentName, version, rt)
+	httpSrv := server.New(rt)
+	work := worker.New(core, rt, config.AgentUUID, config.PollInterval)
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return grpcserver.Serve(gctx, config.GRPCPort, agentSvc) })

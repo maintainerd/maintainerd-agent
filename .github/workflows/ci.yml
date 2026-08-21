@@ -9,10 +9,10 @@ on:
 permissions:
   contents: read
 
-# The agent consumes the SDK, core, docker, and secret via local module replaces
-# (see go.mod). In CI we check out those siblings and repoint the replaces at
-# them so the module resolves. (A Go workspace / published modules replace this
-# once the suite ships.)
+# The agent consumes core, kit, the SDK, and secret via local module replaces
+# (see go.mod). In CI we check out exactly those siblings and repoint the
+# replaces at them so the module resolves. (A Go workspace / published modules
+# replace this once the suite ships.)
 jobs:
   proto:
     name: Proto (buf lint)
@@ -40,8 +40,8 @@ jobs:
           path: .deps/core
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: maintainerd/maintainerd-docker
-          path: .deps/docker
+          repository: maintainerd/maintainerd-kit
+          path: .deps/kit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: maintainerd/maintainerd-sdk
@@ -57,7 +57,7 @@ jobs:
       - name: Repoint replaces at checked-out siblings
         run: |
           go mod edit -replace github.com/maintainerd/core=./.deps/core
-          go mod edit -replace github.com/maintainerd/docker=./.deps/docker
+          go mod edit -replace github.com/maintainerd/kit=./.deps/kit
           go mod edit -replace github.com/maintainerd/sdk=./.deps/sdk
           go mod edit -replace github.com/maintainerd/secret=./.deps/secret
       - run: go build ./...
@@ -76,8 +76,8 @@ jobs:
           path: .deps/core
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: maintainerd/maintainerd-docker
-          path: .deps/docker
+          repository: maintainerd/maintainerd-kit
+          path: .deps/kit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: maintainerd/maintainerd-sdk
@@ -93,7 +93,7 @@ jobs:
       - name: Repoint replaces at checked-out siblings
         run: |
           go mod edit -replace github.com/maintainerd/core=./.deps/core
-          go mod edit -replace github.com/maintainerd/docker=./.deps/docker
+          go mod edit -replace github.com/maintainerd/kit=./.deps/kit
           go mod edit -replace github.com/maintainerd/sdk=./.deps/sdk
           go mod edit -replace github.com/maintainerd/secret=./.deps/secret
       - name: staticcheck

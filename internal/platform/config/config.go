@@ -6,6 +6,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -32,6 +33,23 @@ var (
 	// AgentUUID is this agent's identity in Core (its agent_uuid), used for
 	// Register/Heartbeat/PullWork/ReportStatus.
 	AgentUUID string
+	// AgentJoinToken is the one-time enrollment token issued by Core. When
+	// present and no local client certificate exists, startup uses it to obtain
+	// the per-agent mTLS certificate before normal gateway calls begin.
+	AgentJoinToken string
+	// AgentClientCertFile / AgentClientKeyFile hold the enrolled per-agent
+	// client certificate and private key used for Core gateway mTLS.
+	AgentClientCertFile string
+	AgentClientKeyFile  string
+	// AgentClientCAFile stores the CA certificate returned by enrollment. It
+	// documents the issuer of the local client cert and is available for later
+	// renewal/inspection workflows.
+	AgentClientCAFile string
+	// CoreTLSCAFile / CoreTLSServerName configure server authentication for
+	// the agent's outbound Core gRPC channel. Outside development, Core dials
+	// must use TLS.
+	CoreTLSCAFile     string
+	CoreTLSServerName string
 	// GRPCPort is the listen address for this agent's AgentService (e.g. ":9091").
 	GRPCPort string
 	// HTTPPort is the listen address for the HTTP liveness surface (e.g. ":8091").
@@ -101,6 +119,13 @@ func Load() {
 	ReconcileConcurrency = getInt("RECONCILE_CONCURRENCY", 4)
 	OfflineThreshold = getInt("OFFLINE_THRESHOLD", 3)
 	StateDir = kitconfig.GetEnv("STATE_DIR", "/var/lib/maintainerd-agent")
+	identityDir := filepath.Join(StateDir, "identity")
+	AgentJoinToken = kitconfig.GetEnv("AGENT_JOIN_TOKEN", "")
+	AgentClientCertFile = kitconfig.GetEnv("AGENT_CLIENT_CERT_FILE", filepath.Join(identityDir, "agent.crt"))
+	AgentClientKeyFile = kitconfig.GetEnv("AGENT_CLIENT_KEY_FILE", filepath.Join(identityDir, "agent.key"))
+	AgentClientCAFile = kitconfig.GetEnv("AGENT_CLIENT_CA_FILE", filepath.Join(identityDir, "agent-ca.crt"))
+	CoreTLSCAFile = kitconfig.GetEnv("CORE_TLS_CA_FILE", "")
+	CoreTLSServerName = kitconfig.GetEnv("CORE_TLS_SERVER_NAME", "")
 
 	AuthJWKSURL = kitconfig.GetEnv("AUTH_JWKS_URL", "")
 	AuthIssuer = kitconfig.GetEnv("AUTH_ISSUER", "")

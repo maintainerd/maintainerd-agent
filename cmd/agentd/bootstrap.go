@@ -11,7 +11,6 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/maintainerd/kit/log"
 	kitserver "github.com/maintainerd/kit/server"
@@ -76,6 +75,46 @@ func run(parent context.Context) error {
 	// authenticated principal outside development.
 	var core *coreclient.Client
 	if config.CoreAddr != "" {
+		identity := coreclient.IdentityFiles{
+			CertFile: config.AgentClientCertFile,
+			KeyFile:  config.AgentClientKeyFile,
+			CAFile:   config.AgentClientCAFile,
+		}
+		enrollTransport, _, err := coreclient.TransportCredentials(coreclient.TransportOptions{
+			CAFile:     config.CoreTLSCAFile,
+			ServerName: config.CoreTLSServerName,
+			AllowPlain: dev,
+		})
+		if err != nil {
+			return fmt.Errorf("core enrollment transport: %w", err)
+		}
+		enrollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		enrolled, err := coreclient.EnsureEnrolled(enrollCtx, config.CoreAddr, config.AgentUUID, config.AgentJoinToken, identity, enrollTransport)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("agent enrollment: %w", err)
+		}
+		if enrolled {
+			slog.Info("agent enrolled with core", "cert_file", config.AgentClientCertFile)
+		}
+		identityReady, err := coreclient.IdentityReady(identity)
+		if err != nil {
+			return fmt.Errorf("agent identity: %w", err)
+		}
+		if !identityReady && !dev {
+			return fmt.Errorf("agent client certificate is required outside development " +
+				"(set AGENT_JOIN_TOKEN for first enrollment or provide AGENT_CLIENT_CERT_FILE + AGENT_CLIENT_KEY_FILE)")
+		}
+		transport, _, err := coreclient.TransportCredentials(coreclient.TransportOptions{
+			CAFile:     config.CoreTLSCAFile,
+			ServerName: config.CoreTLSServerName,
+			CertFile:   certFileWhenReady(identityReady, config.AgentClientCertFile),
+			KeyFile:    certFileWhenReady(identityReady, config.AgentClientKeyFile),
+			AllowPlain: dev,
+		})
+		if err != nil {
+			return fmt.Errorf("core transport: %w", err)
+		}
 		creds, err := buildCoreCredentials()
 		if err != nil {
 			return fmt.Errorf("core credentials: %w", err)
@@ -91,7 +130,7 @@ func run(parent context.Context) error {
 			creds = sdk.Anonymous{}
 		}
 		coreConn, err := grpc.NewClient(config.CoreAddr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithTransportCredentials(transport),
 			coreclient.WithCredentials(creds),
 		)
 		if err != nil {
@@ -198,4 +237,11 @@ func buildCoreCredentials() (sdk.Credentials, error) {
 		})
 	}
 	return nil, nil
+}
+
+func certFileWhenReady(ready bool, path string) string {
+	if !ready {
+		return ""
+	}
+	return path
 }

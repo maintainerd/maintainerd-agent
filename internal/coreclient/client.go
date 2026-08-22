@@ -19,6 +19,14 @@ func New(conn *grpc.ClientConn) *Client {
 	return &Client{c: corev1.NewAgentGatewayServiceClient(conn)}
 }
 
+// Enrollment is the signed mTLS identity returned by Core's one-time
+// enrollment exchange.
+type Enrollment struct {
+	CertificatePEM   []byte
+	CACertificatePEM []byte
+	ExpiresAt        string
+}
+
 // WorkItem is a resource that needs reconciling.
 type WorkItem struct {
 	ResourceUUID string
@@ -39,6 +47,22 @@ type StatusReport struct {
 func (c *Client) Register(ctx context.Context, agentUUID, version string, capabilities []string) error {
 	_, err := c.c.Register(ctx, &corev1.RegisterRequest{AgentUuid: agentUUID, Version: version, Capabilities: capabilities})
 	return err
+}
+
+func (c *Client) Enroll(ctx context.Context, agentUUID, joinToken string, csrPEM []byte) (*Enrollment, error) {
+	resp, err := c.c.Enroll(ctx, &corev1.EnrollRequest{
+		AgentUuid: agentUUID,
+		JoinToken: joinToken,
+		CsrPem:    string(csrPEM),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &Enrollment{
+		CertificatePEM:   []byte(resp.GetCertificatePem()),
+		CACertificatePEM: []byte(resp.GetCaCertificatePem()),
+		ExpiresAt:        resp.GetExpiresAt(),
+	}, nil
 }
 
 func (c *Client) Heartbeat(ctx context.Context, agentUUID string) error {

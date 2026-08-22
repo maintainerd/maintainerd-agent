@@ -25,7 +25,7 @@ func TransportCredentials(opts TransportOptions) (credentials.TransportCredentia
 	hasTLS := opts.CAFile != "" || opts.ServerName != "" || opts.CertFile != "" || opts.KeyFile != ""
 	if !hasTLS {
 		if !opts.AllowPlain {
-			return nil, false, fmt.Errorf("Core gRPC TLS is required outside development")
+			return nil, false, fmt.Errorf("core gRPC TLS is required outside development")
 		}
 		return insecure.NewCredentials(), false, nil
 	}

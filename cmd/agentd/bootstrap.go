@@ -58,6 +58,9 @@ func run(parent context.Context) error {
 	if err := requireControlPlane(config.CoreAddr, dev); err != nil {
 		return err
 	}
+	if err := requireAgentIdentity(config.CoreAddr, config.AgentUUID, dev); err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -191,6 +194,33 @@ func requireControlPlane(coreAddr string, dev bool) error {
 	return fmt.Errorf("CORE_ADDR is required outside development: an agent with no control-plane " +
 		"address converges nothing while still reporting healthy. Set CORE_ADDR to the maintainerd-core " +
 		"gRPC address, or APP_ENV=development for runtime-only driver work")
+}
+
+// requireAgentIdentity refuses to boot an agent that will talk to Core without
+// knowing who it is.
+//
+// AGENT_UUID is not a credential — it is the identifier every Register,
+// Heartbeat and PullWork carries so Core can match the call to a row in its
+// agents table. An empty one is checked during FIRST enrollment, but
+// coreclient.EnsureEnrolled returns as soon as a client certificate already
+// exists on disk, so that check is unreachable on every boot after the first.
+// An agent that lost the variable — a rewritten EnvironmentFile, a unit edited
+// by hand — therefore came up holding a valid certificate and sent anonymous
+// RPCs forever, converging nothing.
+//
+// It is louder than the CORE_ADDR hole (it warns on every tick rather than
+// blocking silently), which is why it was recorded as the second-order case
+// rather than fixed with it. It is still a host that reports healthy and does no
+// work, so it is closed the same way: gated on the control plane being
+// configured at all, and relaxed in development like the other affordances here.
+func requireAgentIdentity(coreAddr, agentUUID string, dev bool) error {
+	if coreAddr == "" || agentUUID != "" || dev {
+		return nil
+	}
+	return fmt.Errorf("AGENT_UUID is required outside development when CORE_ADDR is set: Core " +
+		"identifies this host by that UUID, so an empty one makes every Register, Heartbeat and " +
+		"PullWork anonymous and nothing is ever converged. Use the agent_uuid returned by Core's " +
+		"CreateAgent for this host")
 }
 
 // resolveInboundGuard decides how the gRPC listener treats callers. Outside

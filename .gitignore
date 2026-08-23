@@ -3,6 +3,9 @@
 /agentd
 *.exe
 
+# Release artifacts (make build-release)
+/dist/
+
 # Test / coverage
 *.out
 coverage.*

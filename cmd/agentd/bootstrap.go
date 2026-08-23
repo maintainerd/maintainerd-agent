@@ -26,9 +26,6 @@ import (
 	"github.com/maintainerd/agent/internal/worker"
 )
 
-// version is the agent build version (overridable via -ldflags at build time).
-var version = "0.1.0-dev"
-
 // run executes the agent bootstrap: build the in-process docker driver, dial
 // the control plane (when CORE_ADDR is set) with the agent's auth-principal
 // credentials, then serve the guarded agent.v1 gRPC surface + HTTP probes and
@@ -40,11 +37,14 @@ var version = "0.1.0-dev"
 //   - OUTBOUND: outside development, a CORE_ADDR without token credentials
 //     refuses to start at all (fail closed) — an anonymous agent channel
 //     would let the host be enrolled without an identity.
+//   - CONTROL PLANE: outside development, no CORE_ADDR at all refuses to start
+//     (see requireControlPlane) — runtime-only is a development affordance.
 func run(parent context.Context) error {
 	config.Load()
 	log.Setup(config.LogLevel)
 	dev := config.IsDevelopment()
 	slog.Info("starting maintainerd-agent",
+		"version", config.AppVersion,
 		"app_env", config.AppEnv,
 		"secret_provider", config.SecretProvider,
 		"agent_name", config.AgentName,
@@ -54,6 +54,10 @@ func run(parent context.Context) error {
 		"http_port", config.HTTPPort,
 		"state_dir", config.StateDir,
 	)
+
+	if err := requireControlPlane(config.CoreAddr, dev); err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -144,7 +148,7 @@ func run(parent context.Context) error {
 	// Inbound guard for the agent's own gRPC surface.
 	guard := resolveInboundGuard(ctx, dev)
 
-	agentSvc := grpcserver.NewService(config.AgentName, version, rt)
+	agentSvc := grpcserver.NewService(config.AgentName, config.AppVersion, rt)
 	httpSrv := server.New(rt)
 	cache := statecache.New(config.StateDir)
 
@@ -154,7 +158,7 @@ func run(parent context.Context) error {
 	}
 	work := worker.New(coreForWorker, rt, cache, worker.Options{
 		AgentUUID:            config.AgentUUID,
-		Version:              version,
+		Version:              config.AppVersion,
 		PollInterval:         config.PollInterval,
 		HeartbeatInterval:    config.HeartbeatInterval,
 		DriftInterval:        config.DriftInterval,
@@ -167,6 +171,26 @@ func run(parent context.Context) error {
 	g.Go(func() error { return kitserver.ServeHTTP(gctx, config.HTTPPort, httpSrv.Router()) })
 	g.Go(func() error { return work.Run(gctx) })
 	return g.Wait()
+}
+
+// requireControlPlane refuses to boot an agent that has nothing to converge
+// against. Runtime-only mode (no CORE_ADDR) is a development affordance —
+// useful for working on the runtime driver with no control plane running — and
+// it is gated exactly like the other development-only relaxations here
+// (reflection registration, plaintext Core transport, the open inbound guard).
+//
+// On a fleet host it is the worst failure shape there is: under systemd with
+// Restart=always the process starts, answers /healthz and /readyz, converges
+// nothing, and blocks forever. Nothing ever alerts, because from the outside
+// the host looks fine. A typo'd variable name in the unit's EnvironmentFile is
+// enough to produce it, so the message names the variable.
+func requireControlPlane(coreAddr string, dev bool) error {
+	if coreAddr != "" || dev {
+		return nil
+	}
+	return fmt.Errorf("CORE_ADDR is required outside development: an agent with no control-plane " +
+		"address converges nothing while still reporting healthy. Set CORE_ADDR to the maintainerd-core " +
+		"gRPC address, or APP_ENV=development for runtime-only driver work")
 }
 
 // resolveInboundGuard decides how the gRPC listener treats callers. Outside

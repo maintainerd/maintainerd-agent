@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Minimal default token scope; the job escalates only what it needs.
+permissions:
+  contents: read
+
+# The agent is installed as a BINARY under systemd, not as a container (the
+# circular dependency is in README.md: the thing that repairs the local docker
+# engine must not be kept alive by it). So a release is tarballs of static
+# binaries plus the unit file and its environment template — the same artifacts
+# `make build-release checksums` produces locally.
+jobs:
+  release:
+    name: Binaries + checksums
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the GitHub Release and attach the artifacts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A runner has no sibling checkouts, so the local module replaces in
+      # go.mod resolve to nothing and the build fails before it starts. Same
+      # treatment as ci.yml.
+      - name: Check out sibling deps
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maintainerd/maintainerd
+          path: .deps/core
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maintainerd/maintainerd-kit
+          path: .deps/kit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maintainerd/maintainerd-sdk
+          path: .deps/sdk
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maintainerd/maintainerd-secret
+          path: .deps/secret
+
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Repoint replaces at checked-out siblings
+        run: |
+          go mod edit -replace github.com/maintainerd/core=./.deps/core
+          go mod edit -replace github.com/maintainerd/kit=./.deps/kit
+          go mod edit -replace github.com/maintainerd/sdk=./.deps/sdk
+          go mod edit -replace github.com/maintainerd/secret=./.deps/secret
+
+      # The tag IS the version: -X stamps it into the binary, so the boot line,
+      # the Info RPC and Core's fleet view report the same string the release
+      # page advertises. Delegated to the Makefile so the artifacts a maintainer
+      # can reproduce by hand are byte-for-byte the ones published here — a
+      # release process nobody can run locally is one nobody can debug.
+      - name: Build release artifacts
+        run: make build-release VERSION=${{ github.ref_name }}
+
+      # Not optional: the documented install path verifies the tarball against
+      # this file before unpacking it as root.
+      - name: Checksums
+        run: |
+          make checksums
+          cat dist/SHA256SUMS
+
+      - name: Attach artifacts to the GitHub release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

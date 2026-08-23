@@ -1,0 +1,171 @@
+[Unit]
+Description=maintainerd agent — per-host convergence executor
+Documentation=https://github.com/maintainerd/maintainerd-agent
+# Wants, NOT Requires, on docker.service. Two reasons, and both are the whole
+# point of shipping the agent as a binary instead of a container:
+#   - Requires would FAIL the agent when the engine is not up yet. The agent's
+#     job is to converge and repair workloads on that engine, so it must start,
+#     find it absent, warn, and retry — the driver already does exactly that.
+#   - Requires would also STOP the agent whenever docker.service is stopped,
+#     which is precisely the moment an operator needs the thing that puts the
+#     workloads back. A supervisor that dies with its subject is not one.
+# network-online.target is likewise a Want: the agent dials OUT to Core with
+# backoff, so a host that boots before its network does converges late rather
+# than not at all.
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+# The agent must never permanently give up on a host. systemd's default rate
+# limit (5 starts / 10s) puts a unit in `failed` and leaves it there, which on a
+# fleet host means a box silently stops converging until somebody notices.
+# Interval 0 disables the limit entirely; RestartSec below is what keeps a crash
+# loop from becoming a busy loop.
+StartLimitIntervalSec=0
+
+[Service]
+# Type=exec (not simple): startup is only considered successful once the binary
+# has actually been executed, so a bad install path or a missing binary is a
+# start failure instead of a unit that looks active with nothing running.
+Type=exec
+ExecStart=/usr/local/bin/maintainerd-agent
+
+Restart=always
+RestartSec=5s
+# The agent handles SIGTERM: it drains the gRPC/HTTP listeners and stops the
+# worker loops. Give that a real budget — a reconcile holding an image pull can
+# take a while to unwind — but bound it so a wedged engine call cannot block a
+# host reboot forever.
+TimeoutStopSec=45s
+
+# NOT root with a socket mount. The honest trade-off: membership of the `docker`
+# group IS root-equivalent, because anyone who can talk to the engine socket can
+# start a privileged container that mounts the host's root filesystem. This unit
+# does not sandbox that away and does not pretend to. What the unprivileged user
+# plus the hardening below actually buys is everything OTHER than the engine
+# path: no write access to the host filesystem, no setuid escalation, no kernel
+# tunables, no persistent state outside one directory. It is also the recognised
+# posture for a host agent (dockerd's own group model), so it is the one an
+# operator can audit against a known baseline. Anyone wanting the engine itself
+# constrained needs rootless docker or a socket-activated proxy — a different
+# and larger decision than this unit.
+User=maintainerd
+Group=maintainerd
+SupplementaryGroups=docker
+
+# Mode 0600, root-owned. systemd reads this as PID 1 BEFORE dropping to the
+# service user, so the file never has to be readable by `maintainerd` — the
+# join token in it is not exposed to the running process's own uid on disk.
+# It holds AGENT_JOIN_TOKEN, which is single-use and consumed on exactly ONE
+# boot: the first one. After the agent has written its client certificate to
+# the state directory, the token line is dead weight and must be deleted.
+# Secrets live here and not in ExecStart because a command line is world
+# readable through /proc — `ps` would print the token to every user on the box.
+EnvironmentFile=/etc/maintainerd/agent.env
+
+# systemd creates and owns /var/lib/maintainerd-agent as maintainerd:maintainerd
+# with mode 0700, on every start, before the process runs. That matters more
+# than it looks: the directory holds the enrolled client key and the system-tier
+# work cache, and work specs can carry configuration secrets — so the mode is
+# part of the security posture, not housekeeping. It also survives an upgrade,
+# which is why re-enrollment is not needed on a version bump.
+StateDirectory=maintainerd-agent
+StateDirectoryMode=0700
+
+# --- hardening ---------------------------------------------------------------
+# Exercised against this binary rather than copied from a template: the agent
+# was run under this block with the Go runtime, both listeners, the outbound
+# gRPC dialer and a live docker unix-socket connection, and nothing tripped.
+# Note that the docker socket stays reachable under ProtectSystem=strict because
+# a read-only mount only refuses writes to regular files, directories and links
+# — connect() on a socket inode is unaffected.
+#
+# Three directives below (ProtectKernelModules, ProtectKernelLogs, ProtectClock)
+# could not be exercised in that harness: they drop capabilities, which an
+# unprivileged user manager may not do, so it fails to SET THEM UP (exit 218)
+# rather than the agent failing under them. They stay because the agent provably
+# uses none of what they remove — it talks to the engine API, not to modules,
+# the kmsg ring or the RTC.
+
+# No setuid binary can escalate out of this unit, ever.
+NoNewPrivileges=yes
+# The whole filesystem hierarchy read-only except the state directory below.
+# /etc, /usr and /boot become inaccessible for writes, so a compromised agent
+# cannot install a persistence mechanism outside its one writable directory.
+ProtectSystem=strict
+ProtectHome=yes
+# The ONLY writable path. StateDirectory= already grants it; naming it here is
+# the explicit floor, so a future directive that widens ProtectSystem cannot
+# silently widen what is writable too.
+ReadWritePaths=/var/lib/maintainerd-agent
+# Private /tmp, so a workload spec's temp file cannot be read or replaced by
+# anything else on the host.
+PrivateTmp=yes
+# The agent reads the docker API and its own state; it has no business writing
+# kernel tunables, loading modules, or editing the cgroup tree — those are the
+# engine's job, and a host agent that can do them is a host agent that can
+# reconfigure the box it is supposed to be reporting on.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectClock=yes
+# The agent has no business reading other processes' /proc entries — a command
+# line on a shared host is where another service's credential leaks from. Only
+# this service's own processes are visible. ProcSubset=pid is deliberately NOT
+# set: it would also hide /proc/meminfo and friends, which is exactly what a
+# host executor may legitimately grow to read, and it buys 0.1 of exposure.
+ProtectProc=invisible
+# Anything the agent writes — the enrolled client key, the work cache — is
+# owner-only by DEFAULT rather than by remembering to pass a mode at each call
+# site. The code passes 0600 explicitly too; this is the backstop.
+UMask=0077
+# Neither creating nor keeping setuid/setgid bits is anything this agent does.
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+# The agent uses no SysV IPC, so this only ever cleans up after something that
+# should not exist — and it keeps a restart loop from accumulating objects.
+RemoveIPC=yes
+# VERIFIED, not assumed: MemoryDenyWriteExecute breaks runtimes that JIT, and it
+# is the directive most likely to be wrong here. Go does not JIT and this binary
+# is CGO_ENABLED=0 with no plugins, so there is nothing that needs W+X memory —
+# confirmed by running the agent under this exact directive through boot, the
+# gRPC and HTTP listeners, TLS dialing, the worker loops and graceful shutdown,
+# with no SIGSYS. Re-verify if cgo or -buildmode=plugin ever enters the build.
+MemoryDenyWriteExecute=yes
+# Outbound-only posture, enforced at the socket layer: AF_UNIX for the docker
+# engine socket, AF_INET/AF_INET6 for the Core dial and the agent's own guarded
+# listener. Nothing else — no AF_NETLINK, no AF_PACKET.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+# @system-service is the standard allow-list for a long-running service.
+# @privileged and @resources are subtracted explicitly: the caps this unit holds
+# are already none, and a syscall filter that says so is one an auditor can read.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# The agent needs no capabilities at all. Its access to the engine is a group
+# membership on a socket, not a capability — see the trade-off note above.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# NOT SET, and the reason is honesty rather than oversight:
+#   PrivateDevices=yes  — the agent needs no device nodes, so it ought to be
+#     safe, but it could not be EXERCISED here: an unprivileged user manager
+#     cannot set up a private /dev (exit 218), so the only evidence available
+#     would be reasoning. Everything else in this block was run. An operator who
+#     wants the remaining 0.2 of exposure can add it and confirm on one host
+#     first.
+#   PrivateNetwork / IPAddressDeny / PrivateUsers — the agent's entire job is to
+#     dial Core and serve two local listeners. These would break it.
+
+# --- logging -----------------------------------------------------------------
+# The journal, by default and deliberately: the agent logs structured JSON to
+# stdout, and there is no log file to rotate, lose, or leave world readable on
+# a host. `journalctl -u maintainerd-agent` is the whole story.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=maintainerd-agent
+
+[Install]
+WantedBy=multi-user.target

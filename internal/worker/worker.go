@@ -132,7 +132,10 @@ func (w *Worker) Run(ctx context.Context) error {
 		"reconcile_concurrency", w.opts.ReconcileConcurrency,
 	)
 	if w.core == nil {
-		slog.Warn("CORE_ADDR not set — running runtime-only (no control plane)")
+		// Reachable in development only: outside it, the bootstrap refuses to
+		// start without CORE_ADDR (cmd/agentd requireControlPlane), because an
+		// agent that converges nothing while reporting healthy never alerts.
+		slog.Warn("CORE_ADDR not set — running runtime-only, no control plane (development only)")
 		<-ctx.Done()
 		return nil
 	}

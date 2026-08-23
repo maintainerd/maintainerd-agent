@@ -13,6 +13,20 @@ import (
 	kitconfig "github.com/maintainerd/kit/config"
 )
 
+// AppVersion is this build's version, stamped at LINK TIME:
+//
+//	go build -ldflags "-X github.com/maintainerd/agent/internal/platform/config.AppVersion=1.4.0"
+//
+// It is NOT read from the environment, deliberately: a version an operator can
+// set is a version that can disagree with the binary, and the one job of this
+// string is to answer "what is actually running" on a host somebody is paging
+// about. It is reported on the boot line, to Core on Register, and by the
+// AgentService Info RPC, so the fleet view and the journal agree.
+//
+// "dev" is the honest answer for a `go build` with no ldflags — every local
+// build and every test.
+var AppVersion = "dev"
+
 var (
 	// AppEnv is "development" or "production". Every security default in the
 	// agent keys off this: anything that is not exactly "development" gets
@@ -27,8 +41,10 @@ var (
 	// AgentName identifies this agent instance.
 	AgentName string
 	// CoreAddr is the maintainerd-core control-plane gRPC address the agent
-	// dials OUT to for work (core.v1). Empty = runtime-only mode (no control
-	// plane). The agent always dials core; core never dials the agent.
+	// dials OUT to for work (core.v1). The agent always dials core; core never
+	// dials the agent. REQUIRED outside development: empty selects
+	// runtime-only mode, which is a development affordance only — see the
+	// boot gate in cmd/agentd.
 	CoreAddr string
 	// AgentUUID is this agent's identity in Core (its agent_uuid), used for
 	// Register/Heartbeat/PullWork/ReportStatus.
